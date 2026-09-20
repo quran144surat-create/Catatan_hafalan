@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#0E4A3B">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Hafalan">
 <title>Catatan Hafalan</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -322,6 +326,8 @@ select.input{appearance:auto;padding-right:6px;text-overflow:ellipsis}
 .h-n2{font-size:12px;color:var(--muted);text-align:right}
 .h-r2{font-size:13px;margin-top:1px}
 #rMetric.wide{max-width:none}
+.smsg{min-height:22px;margin-top:12px;font-size:14px;color:var(--muted)}
+.smsg.err{color:var(--warn-ink)}
 </style>
 </head>
 <body>
@@ -478,9 +484,9 @@ select.input{appearance:auto;padding-right:6px;text-overflow:ellipsis}
             <label><input type="radio" name="r-mode" value="month"><span>Bulanan</span></label>
             <label><input type="radio" name="r-mode" value="year"><span>Tahunan</span></label>
           </div>
-          <div class="seg wide" id="rMetric" role="radiogroup" aria-label="Jenis hafalan">
-            <label><input type="radio" name="r-metric" value="quran" checked><span>Quran (hal)</span></label>
-            <label><input type="radio" name="r-metric" value="ayat"><span>Quran (ayat)</span></label>
+          <div class="seg wide" id="rMetric" role="radiogroup" aria-label="Satuan rekap: halaman Quran, ayat Quran, atau bait matan">
+            <label><input type="radio" name="r-metric" value="quran" checked><span>Halaman</span></label>
+            <label><input type="radio" name="r-metric" value="ayat"><span>Ayat</span></label>
             <label><input type="radio" name="r-metric" value="matan"><span>Matan</span></label>
           </div>
           <div class="ynav" id="rNav">
@@ -509,6 +515,20 @@ select.input{appearance:auto;padding-right:6px;text-overflow:ellipsis}
           <div class="field" style="margin-top:8px"><label for="bkText">Teks cadangan (JSON)</label><textarea class="input" id="bkText" spellcheck="false"></textarea></div>
           <div class="row-actions"><button class="btn small" type="button" id="bkFromText">Impor dari teks</button></div>
         </details>
+      </div>
+      <div class="panel" id="syncPanel" hidden>
+        <div class="ph"><h3>Sinkronisasi Google Sheets</h3></div>
+        <p class="sub" id="syncInfo"></p>
+        <div class="form-grid" style="margin-top:12px">
+          <div class="field"><label for="sy-url">Alamat Web App (berakhiran /exec)</label><input class="input" id="sy-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://script.google.com/macros/s/.../exec"></div>
+          <div class="field"><label for="sy-code">Kode rahasia</label><input class="input" id="sy-code" type="password" autocomplete="off" spellcheck="false" placeholder="Sama dengan KODE_RAHASIA di skrip"></div>
+        </div>
+        <div class="smsg" id="sy-msg" role="status" aria-live="polite"></div>
+        <div class="row-actions">
+          <button class="btn primary" type="button" id="sy-save">Simpan dan uji koneksi</button>
+          <button class="btn" type="button" id="sy-now" hidden>Sinkronkan sekarang</button>
+          <button class="btn ghost" type="button" id="sy-off" hidden>Putuskan</button>
+        </div>
       </div>
     </section>
   </main>
@@ -567,7 +587,7 @@ const ICON={
 };
 
 /* ---------- State ---------- */
-const S={quran:[],matan:[],matanLog:[]};
+const S={quran:[],matan:[],matanLog:[],deleted:[]};
 const ui={view:'dash',juz:null,matanId:null,qShown:15,mShown:15,rmode:'day',rmetric:'quran',ryear:new Date().getFullYear(),rmonth:new Date().getMonth(),ringAnim:false,bait:null,sel:null,selA:null,surah:null,mapMode:'juz'};
 
 /* ---------- Data mushaf Madinah (KFGQPC 1405H, 604 halaman) ---------- */
@@ -662,7 +682,7 @@ function cleanQuran(e){
 }
 function cleanMatan(m){
   if(!m||typeof m!=='object'||typeof m.title!=='string'||!Number.isInteger(m.total)||m.total<1)return null;
-  return{id:String(m.id||uid()),title:m.title.slice(0,80),total:m.total,createdAt:Number(m.createdAt)||0};
+  return{id:String(m.id||uid()),title:m.title.slice(0,80),total:m.total,createdAt:Number(m.createdAt)||0,updatedAt:Number(m.updatedAt)||Number(m.createdAt)||0};
 }
 function cleanLog(e,ids){
   if(!e||typeof e!=='object')return null;
@@ -679,9 +699,13 @@ function cleanState(raw){
   const ids=new Map();
   (Array.isArray(raw.matan)?raw.matan:[]).forEach(m=>{const c=cleanMatan(m);if(c){mt.push(c);ids.set(c.id,c);}else skipped++;});
   (Array.isArray(raw.matanLog)?raw.matanLog:[]).forEach(e=>{const c=cleanLog(e,ids);c?ml.push(c):skipped++;});
-  return{quran:q,matan:mt,matanLog:ml,skipped:skipped};
+  const dl=[];
+  (Array.isArray(raw.deleted)?raw.deleted:[]).forEach(t=>{
+    if(t&&typeof t==='object'&&(typeof t.id==='string'||typeof t.id==='number')&&(t.kind==='q'||t.kind==='m'||t.kind==='l'))dl.push({id:String(t.id),kind:t.kind,at:Number(t.at)||0});
+  });
+  return{quran:q,matan:mt,matanLog:ml,deleted:dl,skipped:skipped};
 }
-function applyState(d){S.quran=d.quran;S.matan=d.matan;S.matanLog=d.matanLog;memVer++;}
+function applyState(d){S.quran=d.quran;S.matan=d.matan;S.matanLog=d.matanLog;S.deleted=d.deleted||[];memVer++;}
 
 /* ---------- Penyimpanan ---------- */
 const Persist={mode:'memory',col:null};
@@ -700,7 +724,7 @@ async function initPersist(){
   try{localStorage.setItem('__t','1');localStorage.removeItem('__t');Persist.mode='local';}catch(e){Persist.mode='memory';}
 }
 async function loadAll(){
-  const raw={quran:[],matan:[],matanLog:[]};
+  const raw={quran:[],matan:[],matanLog:[],deleted:[]};
   if(Persist.mode==='db'){
     const snap=await Persist.col.get();
     snap.docs.forEach(d=>{
@@ -710,7 +734,7 @@ async function loadAll(){
       else if(id.indexOf('matanlog-')===0&&Array.isArray(data.entries))raw.matanLog.push.apply(raw.matanLog,data.entries);
     });
   }else if(Persist.mode==='local'){
-    try{const t=localStorage.getItem(LS_KEY);if(t){const p=JSON.parse(t);raw.quran=p.quran||[];raw.matan=p.matan||[];raw.matanLog=p.matanLog||[];}}catch(e){}
+    try{const t=localStorage.getItem(LS_KEY);if(t){const p=JSON.parse(t);raw.quran=p.quran||[];raw.matan=p.matan||[];raw.matanLog=p.matanLog||[];raw.deleted=p.deleted||[];}}catch(e){}
   }
   return cleanState(raw);
 }
@@ -719,14 +743,21 @@ let flushing=false,flushTimer=null,saveState='saved',lastErr=null;
 function setSave(s,err){
   saveState=s;lastErr=err||null;
   const el=$('status'),t=$('statusT'),r=$('statusRetry');
-  let key=s,txt='Tersimpan';
+  let key=s,txt='Tersimpan',retry=s==='error';
   if(s==='saving')txt='Menyimpan…';
   else if(s==='error')txt=(err&&err.code==='quota_exceeded')?'Penyimpanan penuh':'Belum tersimpan';
-  else if(Persist.mode==='local'){key='local';txt='Hanya di browser ini';}
+  else if(Persist.mode==='local'){
+    if(syncOn()){
+      if(sync.state==='syncing'){key='saving';txt='Menyinkronkan…';}
+      else if(sync.state==='error'){key='error';txt='Sinkron gagal';retry=true;}
+      else if(sync.state==='ok'){key='saved';txt='Tersinkron';}
+      else{key='local';txt='Menunggu sinkron';}
+    }else{key='local';txt='Hanya di browser ini';}
+  }
   else if(Persist.mode==='memory'){key='memory';txt='Tidak tersimpan';}
-  el.dataset.s=key;t.textContent=txt;r.hidden=s!=='error';
+  el.dataset.s=key;t.textContent=txt;r.hidden=!retry;
 }
-function markDirty(){for(let i=0;i<arguments.length;i++)dirty.add(arguments[i]);scheduleFlush();}
+function markDirty(){for(let i=0;i<arguments.length;i++)dirty.add(arguments[i]);scheduleFlush();syncSoon();}
 function scheduleFlush(){setSave('saving');clearTimeout(flushTimer);flushTimer=setTimeout(flush,350);}
 async function writeDoc(id){
   let body,empty=false;
@@ -755,7 +786,7 @@ async function flush(){
       }
     }else if(Persist.mode==='local'){
       dirty.clear();
-      localStorage.setItem(LS_KEY,JSON.stringify({quran:S.quran.map(persistQ),matan:S.matan,matanLog:S.matanLog}));
+      persistLocalNow();
     }else dirty.clear();
     setSave('saved');
   }catch(e){setSave('error',e);}
@@ -770,6 +801,182 @@ function markAllDirty(oldQ,oldL){
 }
 const qDoc=e=>'quran-'+e.date.slice(0,4);
 const lDoc=e=>'matanlog-'+e.date.slice(0,4);
+
+/* ---------- Sinkronisasi Google Sheets (hanya mode penyimpanan browser) ---------- */
+const SYNC_KEY='catatan-hafalan-sync';
+const SYNC_URL_RE=/^https:\/\/script\.google\.com\/(a\/macros\/[^\/\s]+|macros)\/s\/[\w-]+\/exec$/;
+const sync={url:'',code:'',rev:0,last:0,state:'off',err:'',busy:false,again:false,timer:null};
+const syncOn=()=>Persist.mode==='local'&&!!sync.url&&!!sync.code;
+function loadSyncCfg(){
+  try{const c=JSON.parse(localStorage.getItem(SYNC_KEY)||'{}');sync.url=c.url||'';sync.code=c.code||'';sync.rev=c.rev||0;sync.last=c.last||0;}catch(e){}
+}
+function saveSyncCfg(){
+  try{localStorage.setItem(SYNC_KEY,JSON.stringify({url:sync.url,code:sync.code,rev:sync.rev,last:sync.last}));}catch(e){}
+}
+function clearSyncCfg(){
+  sync.url='';sync.code='';sync.rev=0;sync.last=0;
+  try{localStorage.removeItem(SYNC_KEY);}catch(e){}
+}
+const HDR={
+  quran:['id','tanggal','jenis','mode','juz_mulai','hal_mulai','juz_selesai','hal_selesai','surat_mulai','ayat_mulai','surat_selesai','ayat_selesai','ts','ringkasan','halaman','ayat'],
+  matan:['id','judul','jumlah_bait','dibuat','diubah'],
+  matanLog:['id','matan_id','matan','tanggal','jenis','bait_mulai','bait_selesai','jumlah_bait','ts'],
+  deleted:['id','tipe','waktu']
+};
+function stateRaw(){return{quran:S.quran.map(persistQ),matan:S.matan,matanLog:S.matanLog,deleted:S.deleted};}
+function persistLocalNow(){try{localStorage.setItem(LS_KEY,JSON.stringify(stateRaw()));}catch(e){}}
+function addTomb(id,kind){S.deleted.push({id:String(id),kind:kind,at:Date.now()});}
+function toTables(C){
+  const asc=(a,b)=>a.date<b.date?-1:a.date>b.date?1:(a.ts-b.ts);
+  const titles={};C.matan.forEach(m=>{titles[m.id]=m.title;});
+  return{
+    quran:{header:HDR.quran,rows:C.quran.slice().sort(asc).map(e=>[
+      e.id,e.date,e.type,e.mode==='ayat'?'ayat':'halaman',
+      e.mode==='ayat'?'':e.sj,e.mode==='ayat'?'':e.sp,e.mode==='ayat'?'':e.ej,e.mode==='ayat'?'':e.ep,
+      e.mode==='ayat'?e.ss:'',e.mode==='ayat'?e.sa:'',e.mode==='ayat'?e.es:'',e.mode==='ayat'?e.ea:'',
+      e.ts,qRangeText(e),Math.round(e.pages*100)/100,e.ayat])},
+    matan:{header:HDR.matan,rows:C.matan.map(m=>[m.id,m.title,m.total,m.createdAt||0,m.updatedAt||0])},
+    matanLog:{header:HDR.matanLog,rows:C.matanLog.slice().sort(asc).map(e=>[e.id,e.matanId,titles[e.matanId]||'',e.date,e.type,e.from,e.to,e.count,e.ts])},
+    deleted:{header:HDR.deleted,rows:C.deleted.map(t=>[t.id,t.kind,t.at])}
+  };
+}
+function fromTables(t){
+  const num=v=>(v===''||v==null)?NaN:Number(v);
+  const q=(t.quran||[]).map(r=>{
+    const base={id:String(r[0]),date:String(r[1]).slice(0,10),type:String(r[2]),ts:num(r[12])};
+    return String(r[3])==='ayat'
+      ?Object.assign(base,{mode:'ayat',ss:num(r[8]),sa:num(r[9]),es:num(r[10]),ea:num(r[11])})
+      :Object.assign(base,{sj:num(r[4]),sp:num(r[5]),ej:num(r[6]),ep:num(r[7])});
+  });
+  const m=(t.matan||[]).map(r=>({id:String(r[0]),title:String(r[1]),total:num(r[2]),createdAt:num(r[3]),updatedAt:num(r[4])}));
+  const l=(t.matanLog||[]).map(r=>({id:String(r[0]),matanId:String(r[1]),date:String(r[3]).slice(0,10),type:String(r[4]),from:num(r[5]),to:num(r[6]),ts:num(r[8])}));
+  const d=(t.deleted||[]).map(r=>({id:String(r[0]),kind:String(r[1]),at:num(r[2])}));
+  return{quran:q,matan:m,matanLog:l,deleted:d};
+}
+function mergeRaw(A,B){
+  const del=new Map();
+  (A.deleted||[]).concat(B.deleted||[]).forEach(t=>{const c=del.get(String(t.id));if(!c||(Number(t.at)||0)>(Number(c.at)||0))del.set(String(t.id),t);});
+  const uni=(a,b)=>{const m=new Map();(a||[]).concat(b||[]).forEach(e=>{if(e&&!del.has(String(e.id))&&!m.has(String(e.id)))m.set(String(e.id),e);});return Array.from(m.values());};
+  const mm=new Map();
+  (A.matan||[]).concat(B.matan||[]).forEach(m=>{
+    if(!m||del.has(String(m.id)))return;
+    const c=mm.get(String(m.id));
+    if(!c||(Number(m.updatedAt)||0)>(Number(c.updatedAt)||0))mm.set(String(m.id),m);
+  });
+  const matan=Array.from(mm.values());
+  const ids=new Set(matan.map(m=>String(m.id)));
+  return{quran:uni(A.quran,B.quran),matan:matan,matanLog:uni(A.matanLog,B.matanLog).filter(e=>ids.has(String(e.matanId))),deleted:Array.from(del.values())};
+}
+function stateSig(c){
+  const ids=a=>a.map(x=>x.id).sort().join(',');
+  return[ids(c.quran),c.matan.map(m=>m.id+'|'+m.title+'|'+m.total+'|'+(m.updatedAt||0)).sort().join(','),ids(c.matanLog),ids(c.deleted)].join('#');
+}
+const syncErr=k=>{const e=new Error(String(k));e.kind=String(k);return e;};
+function syncMsg(e){
+  const k=e&&e.kind;
+  if(k==='kode')return'Kode rahasia salah. Samakan dengan KODE_RAHASIA di skrip.';
+  if(k==='kode belum diganti')return'Kode rahasia di skrip belum diganti. Ubah KODE_RAHASIA, simpan, lalu terapkan ulang (versi baru).';
+  if(k==='jaringan')return'Tidak bisa terhubung. Periksa koneksi internet dan alamat Web App.';
+  if(k==='akses')return'Balasan tidak dikenali. Pastikan Web App diterapkan dengan akses "Siapa saja" (Anyone) dan alamatnya berakhiran /exec.';
+  if(k==='konflik')return'Data sedang diubah dari perangkat lain. Coba sinkronkan lagi.';
+  return'Sinkronisasi gagal: '+((e&&e.message)||'kesalahan tidak dikenal');
+}
+async function callSheet(payload){
+  const ctrl=new AbortController(),to=setTimeout(()=>ctrl.abort(),30000);
+  let res;
+  try{
+    res=await fetch(sync.url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(Object.assign({code:sync.code},payload)),redirect:'follow',signal:ctrl.signal});
+  }catch(e){throw syncErr('jaringan');}
+  finally{clearTimeout(to);}
+  let data;
+  try{data=JSON.parse(await res.text());}catch(e){throw syncErr('akses');}
+  if(!data||typeof data!=='object')throw syncErr('akses');
+  return data;
+}
+function setSyncState(st,err){
+  sync.state=st;sync.err=err?syncMsg(err):'';
+  setSave(saveState,lastErr);
+  renderSyncPanel();
+}
+function afterRemoteChange(){
+  renderAll();
+  if(qEl.sj.value===''&&qEl.sp.value===''&&aEl.ss.value==='')prefillQuran();
+}
+async function syncNow(){
+  if(!syncOn())return;
+  if(sync.busy){sync.again=true;return;}
+  sync.busy=true;clearTimeout(sync.timer);setSyncState('syncing');
+  try{
+    let ok=false;
+    for(let attempt=0;attempt<4&&!ok;attempt++){
+      const pulled=await callSheet({action:'pull'});
+      if(!pulled.ok)throw syncErr(pulled.error);
+      const remote=fromTables(pulled.tables||{});
+      const merged=cleanState(mergeRaw(stateRaw(),remote));
+      const after=stateSig(merged);
+      if(stateSig(S)!==after){applyState(merged);persistLocalNow();afterRemoteChange();}
+      if(stateSig(cleanState(remote))===after){sync.rev=pulled.rev;ok=true;break;}
+      const pushed=await callSheet({action:'push',baseRev:pulled.rev,tables:toTables(merged)});
+      if(pushed.ok){sync.rev=pushed.rev;ok=true;break;}
+      if(pushed.error!=='konflik')throw syncErr(pushed.error);
+    }
+    if(!ok)throw syncErr('konflik');
+    sync.last=Date.now();saveSyncCfg();setSyncState('ok');
+  }catch(e){setSyncState('error',e);}
+  finally{sync.busy=false;if(sync.again){sync.again=false;syncSoon();}}
+}
+function syncSoon(ms){
+  if(!syncOn())return;
+  clearTimeout(sync.timer);
+  if(!sync.busy){sync.state='pending';setSave(saveState,lastErr);}
+  sync.timer=setTimeout(()=>{syncNow();},ms==null?2500:ms);
+}
+function fmtStamp(ts){
+  const d=new Date(ts);
+  return d.getDate()+' '+MON3[d.getMonth()]+' '+d.getFullYear()+', '+pad(d.getHours())+'.'+pad(d.getMinutes());
+}
+function syncMessage(text,isErr){const el=$('sy-msg');el.textContent=text||'';el.className='smsg'+(isErr?' err':'');}
+function renderSyncPanel(){
+  const panel=$('syncPanel');
+  panel.hidden=Persist.mode!=='local';
+  if(panel.hidden)return;
+  const on=syncOn();
+  $('sy-off').hidden=!on;$('sy-now').hidden=!on;
+  $('syncInfo').textContent=on
+    ?'Tersambung ke Google Sheets. '+(sync.last?'Terakhir sinkron: '+fmtStamp(sync.last)+'.':'Belum pernah sinkron.')
+    :'Belum tersambung. Catatanmu tersimpan di browser ini saja. Ikuti panduan untuk menyambungkan Google Sheets.';
+  if(sync.state==='error')syncMessage(sync.err,true);
+  else if(sync.state==='syncing')syncMessage('Menyinkronkan…',false);
+  else if(sync.state==='ok')syncMessage('Sinkronisasi berhasil.',false);
+}
+async function saveSyncSettings(){
+  const url=$('sy-url').value.trim(),code=$('sy-code').value;
+  if(!SYNC_URL_RE.test(url))return syncMessage('Alamat tidak sesuai. Salin alamat Web App dari Apps Script. Bentuknya https://script.google.com/macros/s/.../exec',true);
+  if(code.length<8)return syncMessage('Kode rahasia minimal 8 karakter.',true);
+  const old={url:sync.url,code:sync.code,rev:sync.rev};
+  sync.url=url;sync.code=code;
+  syncMessage('Menguji koneksi…',false);
+  try{
+    const r=await callSheet({action:'ping'});
+    if(!r.ok)throw syncErr(r.error);
+    saveSyncCfg();
+    $('sy-code').value='';
+    sync.state='idle';setSave(saveState,lastErr);renderSyncPanel();
+    syncMessage('Terhubung ke "'+r.nama+'". Menyinkronkan data…',false);
+    await syncNow();
+  }catch(e){
+    sync.url=old.url;sync.code=old.code;sync.rev=old.rev;
+    syncMessage(syncMsg(e),true);
+  }
+}
+async function disconnectSync(){
+  const c=await ask({title:'Putuskan sambungan?',body:'Catatan di browser ini tetap ada, dan isi Google Sheet tidak diubah. Sinkronisasi berhenti sampai kamu menyambungkannya lagi.',
+    actions:[{label:'Batal',value:null,kind:'ghost'},{label:'Putuskan',value:'go',kind:'danger'}]});
+  if(c!=='go')return;
+  clearSyncCfg();sync.state='off';sync.err='';
+  $('sy-url').value='';$('sy-code').value='';
+  setSave(saveState,lastErr);renderSyncPanel();syncMessage('Sambungan diputus.',false);
+}
 
 /* ---------- Perhitungan ---------- */
 function matanInfo(m){
@@ -1114,504 +1321,4 @@ function renderQHist(){
 }
 async function delQuran(id){
   const e=S.quran.find(x=>x.id===id);if(!e)return;
-  const c=await ask({title:'Hapus setoran ini?',body:fmtLong(e.date)+', '+qRangeText(e)+' ('+(e.mode==='ayat'?nf.format(e.ayat)+' ayat':e.pages+' halaman')+'). Setoran yang dihapus tidak bisa dikembalikan.',
-    actions:[{label:'Batal',value:null,kind:'ghost'},{label:'Hapus',value:'del',kind:'danger'}]});
-  if(c!=='del')return;
-  S.quran=S.quran.filter(x=>x.id!==id);memVer++;
-  markDirty(qDoc(e));updateQ();renderAll();toast('Setoran dihapus');
-}
-
-/* ---------- Matan ---------- */
-const mEl={from:$('m-from'),to:$('m-to'),date:$('m-date'),res:$('m-result'),save:$('m-save')};
-const mType=()=>document.querySelector('input[name="m-type"]:checked').value;
-function validateMatan(){
-  const m=curMatan();
-  if(!m)return{state:'empty',msg:'Pilih matan terlebih dahulu.'};
-  const f=toInt(mEl.from.value),t=toInt(mEl.to.value);
-  if(f===null&&t===null)return{state:'empty',msg:'Isi bait mulai dan bait selesai.'};
-  if(f===null||t===null)return{state:'partial',msg:'Lengkapi bait mulai dan bait selesai.'};
-  if(Number.isNaN(f)||Number.isNaN(t))return{state:'error',msg:'Isi dengan angka bulat, tanpa huruf atau tanda lain.'};
-  if(f<1||f>m.total)return{state:'error',msg:'Bait mulai harus antara 1 dan '+m.total+' (jumlah bait matan ini).'};
-  if(t<1||t>m.total)return{state:'error',msg:'Bait selesai harus antara 1 dan '+m.total+' (jumlah bait matan ini).'};
-  if(t<f)return{state:'error',msg:'Bait selesai ('+t+') lebih kecil dari bait mulai ('+f+').'};
-  const d=mEl.date.value;
-  if(!d)return{state:'error',msg:'Pilih tanggal setoran.'};
-  if(d>todayS())return{state:'error',msg:'Tanggal setoran tidak boleh di masa depan.'};
-  let overlap=0;
-  if(mType()==='baru'){const info=matanInfo(m);for(let b=f;b<=t;b++)if(info.mem.has(b))overlap++;}
-  return{state:'ok',count:t-f+1,from:f,to:t,date:d,overlap:overlap,m:m};
-}
-function updateM(){
-  const v=validateMatan();
-  mEl.res.className='res'+(v.state==='ok'?' ok':v.state==='error'?' err':'');
-  if(v.state==='ok'){
-    mEl.res.innerHTML='<div><span class="big">'+v.count+'</span>bait</div><div class="sub2">Bait '+v.from+' sampai '+v.to+'</div>'+
-      (v.overlap?'<div class="note">'+v.overlap+' bait sudah tercatat sebagai hafalan baru sebelumnya.</div>':'');
-  }else mEl.res.textContent=v.msg;
-  mEl.save.disabled=v.state!=='ok';
-}
-function prefillMatan(){
-  const m=curMatan();mEl.to.value='';mEl.from.value='';
-  if(m){const info=matanInfo(m);if(info.maxBaru>0&&info.maxBaru<m.total)mEl.from.value=info.maxBaru+1;}
-  updateM();
-}
-function selectMatan(id){
-  ui.matanId=id;ui.bait=null;ui.mShown=15;
-  prefillMatan();renderMatan();
-}
-async function saveMatanEntry(){
-  const v=validateMatan();
-  if(v.state!=='ok')return;
-  let type=mType();
-  if(type==='baru'&&v.overlap>0){
-    const c=await ask({title:'Sebagian sudah tercatat',body:v.overlap+' dari '+v.count+' bait di rentang ini sudah tercatat sebagai hafalan baru. Simpan sebagai apa?',
-      actions:[{label:'Batal',value:null,kind:'ghost'},{label:'Tetap hafalan baru',value:'baru'},{label:"Muraja'ah",value:'murajaah',kind:'primary'}]});
-    if(!c)return;
-    type=c;
-  }
-  const e={id:uid(),matanId:v.m.id,date:v.date,type:type,from:v.from,to:v.to,count:v.count,ts:Date.now()};
-  S.matanLog.push(e);
-  markDirty(lDoc(e));
-  if(type==='baru')prefillMatan();else{mEl.to.value='';updateM();}
-  renderAll();
-  toast('Setoran tersimpan: '+v.count+' bait');
-}
-function renderMatan(){
-  const list=$('mList');
-  $('m-sum').textContent=S.matan.length?S.matan.length+' matan tercatat':'';
-  if(!S.matan.length){
-    list.innerHTML='<div class="panel empty" style="grid-column:1/-1"><h3>Belum ada matan</h3><p>Tambahkan nama matan dan jumlah baitnya. Setelah itu kamu bisa mencatat bait yang dihafal setiap hari.</p><button class="btn primary" type="button" data-add-matan="1">Tambah matan pertama</button></div>';
-    $('mWork').hidden=true;ui.matanId=null;return;
-  }
-  if(!curMatan()){ui.matanId=S.matan[0].id;prefillMatan();}
-  list.innerHTML=S.matan.map(m=>{
-    const info=matanInfo(m),p=info.count/m.total*100;
-    return'<button type="button" class="mrow'+(m.id===ui.matanId?' sel':'')+'" data-m="'+esc(m.id)+'" aria-pressed="'+(m.id===ui.matanId)+'"><span class="mr-t">'+esc(m.title)+'</span><span class="chip '+info.status.k+'">'+info.status.t+'</span><span class="mr-n">'+info.count+' dari '+m.total+' bait</span><span class="bar"><i style="width:'+p+'%"></i></span></button>';
-  }).join('');
-  $('mWork').hidden=false;
-  const m=curMatan(),info=matanInfo(m),t=todayS();
-  const pct=info.count/m.total*100;
-  const bt=m.total<=100?26:(m.total<=400?18:13);
-  let tiles='';
-  for(let b=1;b<=m.total;b++){
-    const s=info.state(b);
-    tiles+='<div class="bt'+(s==='hafal'?' h':s==='ulang'?' u':'')+(ui.bait===b?' sel':'')+'" data-b="'+b+'">'+(m.total<=100?b:'')+'</div>';
-  }
-  let est='';
-  const rem=m.total-info.count;
-  if(rem<=0)est='<p class="lead">Seluruh bait matan ini sudah tercatat hafal. Alhamdulillah.</p>';
-  else{
-    const e=etaText(rem,paceOf(S.matanLog.filter(x=>x.matanId===m.id&&x.type==='baru'),x=>x.count),'bait');
-    if(e&&e.ok)est='<p class="lead">Perkiraan selesai: <b style="font:600 22px var(--serif)">'+esc(e.date)+'</b></p><p class="sub">Sekitar '+esc(e.dur)+' lagi, rata-rata '+e.avg+' bait per hari selama '+e.span+' hari terakhir.</p>';
-    else if(e)est='<p class="sub">'+esc(e.text)+'</p>';
-  }
-  $('mDetail').innerHTML=
-   '<div class="ph"><div><h3>'+esc(m.title)+'</h3><p class="sub">'+info.count+' dari '+m.total+' bait ('+nf1.format(pct)+'%) <span class="chip '+info.status.k+'">'+info.status.t+'</span></p></div>'+
-   '<div class="acts"><button class="icon-btn" type="button" data-act="edit" aria-label="Ubah matan">'+ICON.edit+'</button><button class="icon-btn" type="button" data-act="del" aria-label="Hapus matan">'+ICON.trash+'</button></div></div>'+
-   '<div class="bar big"><i style="width:'+pct+'%"></i></div>'+
-   '<div class="bmap" id="bmap" style="--bt:'+bt+'px" role="img" aria-label="Peta bait: '+(info.count-info.stale)+' hafal, '+info.stale+' perlu diulang, '+(m.total-info.count)+' belum dihafal">'+tiles+'</div>'+
-   '<div class="legend"><span><i></i>Belum</span><span><i class="h"></i>Hafal</span><span><i class="u"></i>Perlu diulang (lebih dari '+STALE+' hari tanpa disetor)</span></div>'+
-   '<p class="sub" id="baitInfo" aria-live="polite">'+(info.stale?info.stale+' bait perlu diulang. Ketuk kotak untuk melihat detail bait.':'Ketuk sebuah kotak untuk melihat detail bait.')+'</p>'+est;
-  // riwayat
-  const logs=S.matanLog.filter(e=>e.matanId===m.id).sort(sortDesc);
-  let h='<div class="ph"><h3>Riwayat setoran</h3></div>';
-  if(!logs.length)h+='<p class="sub">Belum ada setoran untuk matan ini.</p>';
-  else{
-    h+=logs.slice(0,ui.mShown).map(e=>
-      '<div class="hrow"><div><div class="h-d">'+esc(fmtDay(e.date))+' '+e.date.slice(0,4)+' <span class="chip '+(e.type==='baru'?'baru':'mur')+'">'+(e.type==='baru'?'Baru':"Muraja'ah")+'</span></div><div class="h-r">Bait '+e.from+' sampai '+e.to+'</div></div>'+
-      '<div class="h-n"><b>'+e.count+'</b>bait</div><button class="icon-btn" type="button" data-del-m="'+esc(e.id)+'" aria-label="Hapus setoran">'+ICON.trash+'</button></div>').join('');
-    if(logs.length>ui.mShown)h+='<button class="btn small more" type="button" id="mMore">Tampilkan lebih banyak</button>';
-  }
-  $('mHist').innerHTML=h;
-}
-function showBait(b){
-  const m=curMatan();if(!m)return;
-  const info=matanInfo(m),s=info.state(b),t=todayS();
-  ui.bait=b;
-  document.querySelectorAll('#bmap .bt.sel').forEach(x=>x.classList.remove('sel'));
-  const tile=document.querySelector('#bmap .bt[data-b="'+b+'"]');if(tile)tile.classList.add('sel');
-  let txt;
-  if(s==='belum')txt='Bait '+b+': belum dihafal.'+(info.last[b]?' Pernah disetor sebagai muraja\'ah pada '+fmtLong(info.last[b])+'.':'');
-  else if(s==='hafal')txt='Bait '+b+': hafal, terakhir disetor '+fmtLong(info.last[b])+'.';
-  else txt='Bait '+b+': perlu diulang. Terakhir disetor '+fmtLong(info.last[b])+' ('+diffDays(info.last[b],t)+' hari lalu).';
-  $('baitInfo').textContent=txt;
-}
-async function delMatanEntry(id){
-  const e=S.matanLog.find(x=>x.id===id);if(!e)return;
-  const c=await ask({title:'Hapus setoran ini?',body:fmtLong(e.date)+', bait '+e.from+' sampai '+e.to+' ('+e.count+' bait). Setoran yang dihapus tidak bisa dikembalikan.',
-    actions:[{label:'Batal',value:null,kind:'ghost'},{label:'Hapus',value:'del',kind:'danger'}]});
-  if(c!=='del')return;
-  S.matanLog=S.matanLog.filter(x=>x.id!==id);
-  markDirty(lDoc(e));updateM();renderAll();toast('Setoran dihapus');
-}
-async function delMatan(){
-  const m=curMatan();if(!m)return;
-  const n=S.matanLog.filter(e=>e.matanId===m.id).length;
-  const c=await ask({title:'Hapus matan "'+m.title+'"?',body:n?'Semua '+n+' catatan setoran matan ini juga akan terhapus dan tidak bisa dikembalikan.':'Matan ini belum punya catatan setoran.',
-    actions:[{label:'Batal',value:null,kind:'ghost'},{label:'Hapus matan',value:'del',kind:'danger'}]});
-  if(c!=='del')return;
-  const years=new Set(S.matanLog.filter(e=>e.matanId===m.id).map(lDoc));
-  S.matan=S.matan.filter(x=>x.id!==m.id);
-  S.matanLog=S.matanLog.filter(e=>e.matanId!==m.id);
-  ui.matanId=null;
-  markDirty.apply(null,['matan'].concat(Array.from(years)));
-  renderAll();toast('Matan dihapus');
-}
-/* Dialog tambah / ubah matan */
-let mdMode='add';
-function openMatanDlg(mode){
-  mdMode=mode;
-  const m=mode==='edit'?curMatan():null;
-  $('mdTitle').textContent=m?'Ubah matan':'Tambah matan';
-  $('md-title').value=m?m.title:'';
-  $('md-total').value=m?m.total:'';
-  $('md-msg').textContent='';
-  mdlg.showModal();
-  setTimeout(()=>$('md-title').focus(),30);
-}
-function submitMatanDlg(ev){
-  ev.preventDefault();
-  const title=$('md-title').value.trim(),total=toInt($('md-total').value);
-  const msg=t=>{$('md-msg').textContent=t;};
-  if(!title)return msg('Isi nama matan.');
-  if(total===null)return msg('Isi jumlah bait.');
-  if(Number.isNaN(total)||total<1)return msg('Jumlah bait harus berupa angka bulat lebih dari 0.');
-  if(total>20000)return msg('Jumlah bait terlalu besar. Maksimal 20.000.');
-  if(mdMode==='edit'){
-    const m=curMatan();
-    const info=matanInfo(m);
-    if(total<info.maxBait)return msg('Jumlah bait tidak boleh lebih kecil dari '+info.maxBait+', bait tertinggi yang sudah tercatat. Hapus dulu setoran yang melewati batas itu.');
-    m.title=title.slice(0,80);m.total=total;
-    markDirty('matan');
-    mdlg.close();renderAll();toast('Matan diperbarui');
-  }else{
-    const m={id:uid(),title:title.slice(0,80),total:total,createdAt:Date.now()};
-    S.matan.push(m);
-    markDirty('matan');
-    mdlg.close();
-    ui.matanId=m.id;prefillMatan();renderAll();
-    if(ui.view!=='matan')showView('matan');
-    toast('Matan ditambahkan');
-  }
-}
-
-/* ---------- Rekap ---------- */
-function mondayOf(s){const d=parseD(s);d.setDate(d.getDate()-((d.getDay()+6)%7));return ymd(d);}
-function keyFor(dateStr,mode){
-  if(mode==='day')return dateStr;
-  if(mode==='week')return mondayOf(dateStr);
-  if(mode==='month')return dateStr.slice(0,7);
-  return dateStr.slice(0,4);
-}
-function weekLabel(k){
-  const a=parseD(k),b=parseD(addDays(k,6));
-  return a.getMonth()===b.getMonth()&&a.getFullYear()===b.getFullYear()
-    ?a.getDate()+'–'+b.getDate()+' '+MON3[b.getMonth()]+' '+b.getFullYear()
-    :a.getDate()+' '+MON3[a.getMonth()]+(a.getFullYear()!==b.getFullYear()?' '+a.getFullYear():'')+' – '+b.getDate()+' '+MON3[b.getMonth()]+' '+b.getFullYear();
-}
-function periods(mode){
-  const t=todayS(),out=[],curKey=keyFor(t,mode),Y=ui.ryear,M=ui.rmonth;
-  if(mode==='day'){
-    const n=new Date(Y,M+1,0).getDate();
-    for(let d=1;d<=n;d++){
-      const k=Y+'-'+pad(M+1)+'-'+pad(d);
-      out.push({key:k,short:(d===1||d%5===0)?String(d):'',label:fmtDay(k)+' '+Y});
-    }
-  }else if(mode==='week'){
-    let k=mondayOf(Y+'-01-01'),prev=-1;
-    const end=Y+'-12-31';
-    while(k<=end){
-      const mo=parseD(addDays(k,3)).getMonth();
-      out.push({key:k,short:mo!==prev?MON3[mo]:'',label:weekLabel(k)});
-      prev=mo;k=addDays(k,7);
-    }
-  }else if(mode==='month'){
-    for(let m=0;m<12;m++)out.push({key:Y+'-'+pad(m+1),short:MON3[m],label:MONTHS[m]+' '+Y});
-  }else{
-    let first=new Date().getFullYear();
-    S.quran.concat(S.matanLog).forEach(e=>{const y=Number(e.date.slice(0,4));if(y<first)first=y;});
-    const cy=new Date().getFullYear(),n=Math.min(8,Math.max(3,cy-first+1));
-    for(let y=cy-n+1;y<=cy;y++)out.push({key:String(y),short:String(y),label:String(y)});
-  }
-  out.forEach(p=>{p.cur=p.key===curKey;p.future=p.key>curKey;p.baru=0;p.mur=0;});
-  return out;
-}
-const metricSrc=m=>m==='matan'?S.matanLog:S.quran;
-const metricVal=(m,e)=>m==='quran'?e.pages:(m==='ayat'?e.ayat:e.count);
-const metricName=m=>({quran:'hafalan Quran dalam halaman',ayat:'hafalan Quran dalam ayat',matan:'hafalan matan dalam bait'})[m];
-function aggregate(mode,metric){
-  const rows=periods(mode),map=new Map();
-  rows.forEach(r=>map.set(r.key,r));
-  const src=metricSrc(metric);
-  src.forEach(e=>{
-    const r=map.get(keyFor(e.date,mode));
-    if(!r)return;
-    const v=metricVal(metric,e);
-    if(e.type==='baru')r.baru+=v;else r.mur+=v;
-  });
-  return rows;
-}
-function niceMax(v){
-  const c=[2,4,6,8,10,12,16,20,30,40,60,80,100,120,160,200,300,400,600,800,1000,1200,1600,2000,3000,4000,6000,8000,10000];
-  for(const x of c)if(v<=x)return x;
-  return Math.ceil(v/2000)*2000;
-}
-function chartSVG(rows,W,label){
-  const H=220,L=34,R=6,T=18,B=28,pw=W-L-R,ph=H-T-B,n=rows.length;
-  const nm=niceMax(Math.max(1,...rows.map(r=>r.baru+r.mur)));
-  const slot=pw/n,bw=Math.min(30,slot*0.62);
-  let s='<svg viewBox="0 0 '+W+' '+H+'" width="'+W+'" height="'+H+'" role="img" aria-label="'+esc(label)+'">';
-  [0,.5,1].forEach(f=>{
-    const y=T+ph*(1-f);
-    s+='<line class="gl" x1="'+L+'" x2="'+(W-R)+'" y1="'+y+'" y2="'+y+'"/><text class="ax" x="'+(L-6)+'" y="'+(y+3.5)+'" text-anchor="end">'+nf.format(nm*f)+'</text>';
-  });
-  rows.forEach((r,i)=>{
-    const cx=L+slot*i+slot/2,x=cx-bw/2;
-    let y=T+ph;
-    if(r.baru>0){const h=Math.max(2,r.baru/nm*ph);y-=h;s+='<rect class="b1" x="'+x+'" y="'+y+'" width="'+bw+'" height="'+h+'" rx="2"/>';}
-    if(r.mur>0){const h=Math.max(2,r.mur/nm*ph);y-=h;s+='<rect class="b2" x="'+x+'" y="'+y+'" width="'+bw+'" height="'+h+'" rx="2"/>';}
-    const tot=r.baru+r.mur;
-    if(tot>0&&slot>=16)s+='<text class="vl" x="'+cx+'" y="'+(y-4)+'" text-anchor="middle">'+fmtN(tot)+'</text>';
-    s+='<text class="xl'+(r.cur?' cur':'')+'" x="'+cx+'" y="'+(H-9)+'" text-anchor="middle">'+esc(r.short)+'</text>';
-  });
-  return s+'</svg>';
-}
-function renderRekap(){
-  const mode=ui.rmode,metric=ui.rmetric;
-  const rows=aggregate(mode,metric);
-  const unit={quran:'halaman',ayat:'ayat',matan:'bait'}[metric];
-  const cy=new Date().getFullYear();
-  // navigasi tahun dan bulan
-  $('rNav').hidden=mode==='year';
-  $('rYear').textContent=ui.ryear;
-  $('rPrev').disabled=ui.ryear<=2000;
-  $('rNext').disabled=ui.ryear>=cy;
-  $('rMonth').hidden=mode!=='day';
-  $('rNote').hidden=mode!=='week';
-  $('rMonth').value=String(ui.rmonth);
-  // total pada cakupan yang dipilih
-  const src=metricSrc(metric);
-  let prefix='',scope;
-  if(mode==='day'){prefix=ui.ryear+'-'+pad(ui.rmonth+1);scope='Total '+MONTHS[ui.rmonth]+' '+ui.ryear;}
-  else if(mode==='year'){scope='Total seluruh tahun';}
-  else{prefix=String(ui.ryear);scope='Total '+ui.ryear;}
-  let tb=0,tm=0;
-  src.forEach(e=>{
-    if(prefix&&e.date.indexOf(prefix)!==0)return;
-    const v=metricVal(metric,e);
-    if(e.type==='baru')tb+=v;else tm+=v;
-  });
-  $('rCur').innerHTML='<div><small>'+scope+': hafalan baru</small><b>'+fmtN(tb)+'<span>'+unit+'</span></b></div><div><small>'+scope+": muraja'ah</small><b>"+fmtN(tm)+'<span>'+unit+'</span></b></div>';
-  const box=$('rChart');
-  const W=Math.max(280,box.clientWidth||320);
-  const modeName={day:'harian',week:'mingguan',month:'bulanan',year:'tahunan'}[mode];
-  const periodName=mode==='day'?' '+MONTHS[ui.rmonth]+' '+ui.ryear:(mode==='year'?'':' '+ui.ryear);
-  box.innerHTML=chartSVG(rows,W,'Grafik batang '+modeName+periodName+' untuk '+metricName(metric));
-  let t='<table class="rt"><thead><tr><th scope="col">Periode</th><th scope="col">Baru</th><th scope="col">Muraja\'ah</th></tr></thead><tbody>';
-  rows.filter(r=>!r.future).reverse().forEach(r=>{
-    t+='<tr'+(r.cur?' class="cur"':'')+'><td>'+esc(r.label)+'</td><td class="'+(r.baru?'':'z')+'">'+(r.baru?fmtN(r.baru):'–')+'</td><td class="'+(r.mur?'':'z')+'">'+(r.mur?fmtN(r.mur):'–')+'</td></tr>';
-  });
-  $('rTable').innerHTML=t+'</tbody></table>';
-  const mn={db:'Datamu tersimpan di akun Claude dan bisa dibuka dari perangkat lain. Ekspor cadangan secara berkala sebagai salinan tambahan.',local:'Penyimpanan akun tidak tersedia di sini, jadi data hanya tersimpan di browser ini. Ekspor cadangan agar tidak hilang.',memory:'Data tidak bisa disimpan permanen di sini. Ekspor cadangan sebelum menutup halaman.'}[Persist.mode];
-  $('bkMode').textContent=mn;
-}
-
-/* ---------- Cadangan ---------- */
-function buildExport(){
-  return JSON.stringify({app:'catatan-hafalan',version:1,exportedAt:new Date().toISOString(),quran:S.quran.map(persistQ),matan:S.matan,matanLog:S.matanLog},null,1);
-}
-async function exportData(){
-  const payload=buildExport();
-  let dl=null;
-  try{dl=window.claude&&typeof window.claude.use==='function'?await window.claude.use('downloads'):null;}catch(e){}
-  if(dl){
-    try{await dl.save({filename:'catatan-hafalan-'+todayS()+'.json',data:payload});toast('Cadangan disimpan');return;}
-    catch(e){if(e&&e.code==='declined')return;}
-  }
-  $('bkText').value=payload;$('bkDetails').open=true;
-  toast('Unduhan tidak tersedia. Salin teks cadangan di bawah.');
-}
-async function importText(text){
-  let data;
-  try{data=JSON.parse(text);}catch(e){toast('File bukan JSON yang valid');return;}
-  if(!data||typeof data!=='object'||(!Array.isArray(data.quran)&&!Array.isArray(data.matan)&&!Array.isArray(data.matanLog))){toast('Format cadangan tidak dikenali');return;}
-  const c=cleanState(data);
-  const c1=await ask({title:'Ganti data dengan cadangan?',body:'Cadangan berisi '+c.quran.length+' setoran Quran, '+c.matan.length+' matan, dan '+c.matanLog.length+' setoran matan'+(c.skipped?' ('+c.skipped+' baris rusak dilewati)':'')+'. Data yang ada sekarang akan diganti seluruhnya.',
-    actions:[{label:'Batal',value:null,kind:'ghost'},{label:'Ganti data',value:'go',kind:'danger'}]});
-  if(c1!=='go')return;
-  const oq=S.quran,ol=S.matanLog;
-  applyState(c);ui.matanId=null;ui.juz=null;
-  markAllDirty(oq,ol);
-  prefillQuran();renderAll();toast('Cadangan dipulihkan');
-}
-
-/* ---------- Render semua ---------- */
-function renderAll(){
-  renderDash();renderJuz();renderSurat();renderQHist();renderMatan();
-  if(ui.view==='rekap')renderRekap();
-}
-
-/* ---------- Event ---------- */
-function bind(){
-  document.querySelectorAll('.nav-i').forEach(b=>b.addEventListener('click',()=>showView(b.dataset.view)));
-  document.addEventListener('click',e=>{
-    const t=e.target.closest('[data-go]');if(t){showView(t.dataset.go);return;}
-    const om=e.target.closest('[data-open-matan]');if(om){selectMatan(om.dataset.openMatan);showView('matan');return;}
-    if(e.target.closest('#dashAddMatan')||e.target.closest('[data-add-matan]')){openMatanDlg('add');return;}
-  });
-  $('statusRetry').addEventListener('click',()=>{if(dirty.size){scheduleFlush();}else setSave('saved');});
-  // Quran
-  AY.forEach((n,i)=>{
-    ['a-ss','a-es','surSel'].forEach(id=>{
-      const o=document.createElement('option');o.value=String(i+1);o.textContent=(i+1)+'. '+SN[i]+' ('+n+' ayat)';$(id).appendChild(o);
-    });
-  });
-  ['a-ss','a-es'].forEach(id=>{const o=document.createElement('option');o.value='';o.textContent='Pilih surat';$(id).insertBefore(o,$(id).firstChild);$(id).value='';});
-  {const o=document.createElement('option');o.value='';o.textContent='Pilih surat';$('surSel').insertBefore(o,$('surSel').firstChild);$('surSel').value='';}
-  const clearPicks=()=>{if(ui.sel){ui.sel=null;renderJuz();}if(ui.selA){ui.selA=null;renderSurat();}};
-  ['sj','sp','ej','ep'].forEach(k=>qEl[k].addEventListener('input',()=>{updateQ();clearPicks();}));
-  ['sa','ea'].forEach(k=>aEl[k].addEventListener('input',()=>{updateQ();clearPicks();}));
-  ['ss','es'].forEach(k=>['input','change'].forEach(ev=>aEl[k].addEventListener(ev,()=>{
-    if(k==='ss'&&!aEl.es.value)aEl.es.value=aEl.ss.value;
-    updateQ();clearPicks();
-  })));
-  qEl.date.addEventListener('input',updateQ);
-  document.querySelectorAll('input[name="q-type"]').forEach(r=>r.addEventListener('change',updateQ));
-  document.querySelectorAll('input[name="q-mode"]').forEach(r=>r.addEventListener('change',()=>setQMode(r.value)));
-  document.querySelectorAll('input[name="map-mode"]').forEach(r=>r.addEventListener('change',()=>setMapMode(r.value)));
-  $('qForm').addEventListener('submit',e=>{e.preventDefault();saveQuran();});
-  $('jmap').addEventListener('click',e=>{const b=e.target.closest('.jt');if(!b)return;const j=Number(b.dataset.j);ui.juz=ui.juz===j?null:j;if(ui.sel&&ui.sel.j!==ui.juz){ui.sel=null;prefillQuran();}renderJuz();});
-  $('juzDetail').addEventListener('click',e=>{
-    const pb=e.target.closest('.pg');
-    if(pb){
-      const p=Number(pb.dataset.p),j=ui.juz,s0=ui.sel;
-      if(!s0||s0.j!==j)ui.sel={j:j,a:p,b:p,picking:true};
-      else if(s0.picking)ui.sel=(p===s0.a)?null:{j:j,a:Math.min(s0.a,p),b:Math.max(s0.a,p),picking:false};
-      else ui.sel={j:j,a:p,b:p,picking:true};
-      if(ui.sel){
-        setQMode('page');
-        qEl.sj.value=j;qEl.ej.value=j;qEl.sp.value=ui.sel.a;qEl.ep.value=ui.sel.b;updateQ();
-      }else prefillQuran();
-      renderJuz();
-      const again=document.querySelector('#juzDetail .pg[data-p="'+p+'"]');if(again)again.focus();
-      return;
-    }
-    if(e.target.closest('[data-clear-sel]')){ui.sel=null;prefillQuran();renderJuz();return;}
-    if(e.target.closest('[data-go-form]')){$('qForm').scrollIntoView({behavior:'smooth',block:'start'});return;}
-    const b=e.target.closest('[data-start-juz]');if(!b)return;
-    ui.sel=null;
-    const j=Number(b.dataset.startJuz),M=mem(),n=juzPages(j);
-    let p=1;for(let i=1;i<=n;i++){if(!M.full[gp(j,i)]){p=i;break;}}
-    document.querySelector('input[name="q-type"][value="baru"]').checked=true;
-    setQMode('page');
-    qEl.sj.value=j;qEl.sp.value=p;qEl.ej.value=j;qEl.ep.value='';updateQ();
-    qEl.ep.focus();qEl.ep.scrollIntoView({block:'center',behavior:'smooth'});
-  });
-  $('smap').addEventListener('click',e=>{const b=e.target.closest('.jt');if(!b)return;const s=Number(b.dataset.s);ui.surah=ui.surah===s?null:s;if(ui.selA&&ui.selA.s!==ui.surah){ui.selA=null;prefillQuran();}renderSurat();});
-  $('surSel').addEventListener('change',e=>{const s=e.target.value?Number(e.target.value):null;ui.surah=s;if(ui.selA&&ui.selA.s!==s){ui.selA=null;prefillQuran();}renderSurat();});
-  $('suratDetail').addEventListener('click',e=>{
-    const ab=e.target.closest('.bt');
-    if(ab){
-      const a=Number(ab.dataset.a),s=ui.surah,s0=ui.selA;
-      if(!s0||s0.s!==s)ui.selA={s:s,a:a,b:a,picking:true};
-      else if(s0.picking)ui.selA=(a===s0.a)?null:{s:s,a:Math.min(s0.a,a),b:Math.max(s0.a,a),picking:false};
-      else ui.selA={s:s,a:a,b:a,picking:true};
-      if(ui.selA){
-        setQMode('ayat');
-        aEl.ss.value=String(s);aEl.es.value=String(s);aEl.sa.value=ui.selA.a;aEl.ea.value=ui.selA.b;updateQ();
-      }else prefillQuran();
-      renderSurat();
-      const again=document.querySelector('#suratDetail .bt[data-a="'+a+'"]');if(again)again.focus();
-      return;
-    }
-    if(e.target.closest('[data-clear-sel]')){ui.selA=null;prefillQuran();renderSurat();return;}
-    if(e.target.closest('[data-go-form]')){$('qForm').scrollIntoView({behavior:'smooth',block:'start'});return;}
-    const b=e.target.closest('[data-start-sur]');if(!b)return;
-    ui.selA=null;
-    const s=Number(b.dataset.startSur),M=mem(),n=AY[s-1];
-    let a=1;for(let i=1;i<=n;i++){if(!M.flag[gAyah(s,i)]){a=i;break;}}
-    document.querySelector('input[name="q-type"][value="baru"]').checked=true;
-    setQMode('ayat');
-    aEl.ss.value=String(s);aEl.sa.value=a;aEl.es.value=String(s);aEl.ea.value='';updateQ();
-    aEl.ea.focus();aEl.ea.scrollIntoView({block:'center',behavior:'smooth'});
-  });
-  $('qHist').addEventListener('click',e=>{
-    const d=e.target.closest('[data-del-q]');if(d){delQuran(d.dataset.delQ);return;}
-    if(e.target.closest('#qMore')){ui.qShown+=15;renderQHist();}
-  });
-  // Matan
-  $('mAdd').addEventListener('click',()=>openMatanDlg('add'));
-  $('mList').addEventListener('click',e=>{
-    const r=e.target.closest('[data-m]');if(r){selectMatan(r.dataset.m);return;}
-    if(e.target.closest('[data-add-matan]'))openMatanDlg('add');
-  });
-  ['from','to'].forEach(k=>mEl[k].addEventListener('input',updateM));
-  mEl.date.addEventListener('input',updateM);
-  document.querySelectorAll('input[name="m-type"]').forEach(r=>r.addEventListener('change',updateM));
-  $('mForm').addEventListener('submit',e=>{e.preventDefault();saveMatanEntry();});
-  $('mDetail').addEventListener('click',e=>{
-    const b=e.target.closest('.bt');if(b){showBait(Number(b.dataset.b));return;}
-    const a=e.target.closest('[data-act]');
-    if(a){if(a.dataset.act==='edit')openMatanDlg('edit');else delMatan();}
-  });
-  $('mHist').addEventListener('click',e=>{
-    const d=e.target.closest('[data-del-m]');if(d){delMatanEntry(d.dataset.delM);return;}
-    if(e.target.closest('#mMore')){ui.mShown+=15;renderMatan();}
-  });
-  $('mdForm').addEventListener('submit',submitMatanDlg);
-  $('md-cancel').addEventListener('click',()=>mdlg.close());
-  // Rekap
-  document.querySelectorAll('input[name="r-mode"]').forEach(r=>r.addEventListener('change',()=>{ui.rmode=r.value;renderRekap();}));
-  MONTHS.forEach((m,i)=>{const o=document.createElement('option');o.value=String(i);o.textContent=m;$('rMonth').appendChild(o);});
-  $('rPrev').addEventListener('click',()=>{if(ui.ryear>2000){ui.ryear--;renderRekap();}});
-  $('rNext').addEventListener('click',()=>{if(ui.ryear<new Date().getFullYear()){ui.ryear++;renderRekap();}});
-  $('rMonth').addEventListener('change',e=>{ui.rmonth=Number(e.target.value);renderRekap();});
-  document.querySelectorAll('input[name="r-metric"]').forEach(r=>r.addEventListener('change',()=>{ui.rmetric=r.value;renderRekap();}));
-  let rz=null;
-  window.addEventListener('resize',()=>{clearTimeout(rz);rz=setTimeout(()=>{if(ui.view==='rekap')renderRekap();if(ui.view==='dash')renderDash();},180);});
-  // Cadangan
-  $('bkExport').addEventListener('click',exportData);
-  $('bkImport').addEventListener('click',()=>$('bkFile').click());
-  $('bkFile').addEventListener('change',async e=>{
-    const f=e.target.files&&e.target.files[0];e.target.value='';
-    if(!f)return;
-    try{importText(await f.text());}catch(err){toast('File tidak bisa dibaca');}
-  });
-  $('bkFromText').addEventListener('click',()=>{const t=$('bkText').value.trim();if(!t){toast('Tempel teks cadangan dulu');return;}importText(t);});
-  // Sinkron saat tab dibuka kembali
-  document.addEventListener('visibilitychange',async()=>{
-    if(document.visibilityState!=='visible'||Persist.mode!=='db'||flushing||dirty.size||!$('boot').hidden)return;
-    try{
-      const d=await loadAll();
-      const sig=o=>JSON.stringify([o.quran.map(x=>x.id).sort(),o.matan.map(x=>x.id+x.title+x.total).sort(),o.matanLog.map(x=>x.id).sort()]);
-      if(sig(d)!==sig(S)&&!flushing&&!dirty.size){applyState(d);renderAll();}
-    }catch(e){}
-  });
-  window.addEventListener('beforeunload',e=>{if(dirty.size||flushing){e.preventDefault();e.returnValue='';}});
-}
-
-/* ---------- Mulai ---------- */
-async function boot(){
-  $('bootRetry').hidden=true;$('bootMsg').textContent='Memuat catatan hafalan…';$('boot').hidden=false;
-  await initPersist();
-  try{applyState(await loadAll());}
-  catch(e){
-    $('bootMsg').textContent='Data belum bisa dimuat. Kamu belum kehilangan apa pun. Periksa koneksi, lalu coba lagi.';
-    $('bootRetry').hidden=false;return;
-  }
-  const t=todayS();
-  qEl.date.value=t;qEl.date.max=t;mEl.date.value=t;mEl.date.max=t;
-  prefillQuran();
-  renderAll();
-  setSave('saved');
-  $('boot').hidden=true;
-  if(Persist.mode==='local')toast('Data disimpan di browser ini saja');
-  else if(Persist.mode==='memory')toast('Data tidak bisa disimpan permanen di sini');
-}
-bind();
-$('bootRetry').addEventListener('click',boot);
-boot();
-})();
-</script>
-</body>
-</html>
+  const c=await ask({title:'Hapus setoran ini?',
